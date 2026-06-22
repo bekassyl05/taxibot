@@ -1,0 +1,4 @@
+taxi_bot.db
+config.py
+__pycache__/
+.env
