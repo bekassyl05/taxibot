@@ -1,3 +1,4 @@
+import asyncio
 from aiogram import Router, F, types
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
@@ -6,7 +7,8 @@ from aiogram.fsm.state import StatesGroup, State, any_state
 from aiogram import Bot
 from database.db import create_order, get_online_drivers, get_available_drivers, get_user, assign_order_to_driver, \
     get_driver, \
-    get_order_details, cancel_order_by_client, save_order_rating, save_order_review, change_user_mode
+    get_order_details, cancel_order_by_client, save_order_rating, save_order_review, change_user_mode, \
+    auto_cancel_waiting_order
 from handlers.driver import DriverRegistration
 from keyboards.reply import get_client_menu_kb, get_address_kb, get_price_kb, get_driver_menu_kb
 from keyboards.inline import get_broadcast_kb
@@ -27,29 +29,32 @@ class ClientFeedback(StatesGroup):
     waiting_for_review = State()
 
 # 🌟 ТҮЗЕТІЛДІ: StateFilter(any_state) қосылды
-@router.message(CommandStart(), StateFilter(any_state))
+@router.message(CommandStart())  # ✨ ТҮЗЕТІЛДІ: Артық state параметрі алып тасталды
 async def cmd_start(message: Message, state: FSMContext):
     """/start командасы - Пайдаланушыны тексеру немесе тіркеуді бастау"""
-    await state.clear()  # Кез келген ескі күйлерді (state) тазалау
+    await state.clear()  # Ескі күйлердің (state) бәрін бірден тазалаймыз
 
     user = await get_user(message.from_user.id)
 
     if user:
-        role = user[2]  # Базадағы 'role' бағаны
-        if role == 'client':
+        # Баған атымен тікелей шақырамыз
+        current_mode = user['current_mode']
+        full_name = user['full_name']
+
+        if current_mode == 'client':
             await message.answer(
-                f"Қайта қош келдіңіз, {user[1]}! (Клиент мәзірі)\nЗаказ беру үшін төмендегі батырмаларды қолданыңыз.",
+                f"Қайта қош келдіңіз, {full_name}! (Клиент мәзірі)\nЗаказ беру үшін төмендегі батырмаларды қолданыңыз.",
                 reply_markup=get_client_menu_kb()
             )
-        elif role == 'driver':
+        elif current_mode == 'driver':
             await message.answer(
-                f"Қайта қош келдіңіз, {user[1]}! (Таксист мәзірі)\nЛинияға шығу үшін басқару панелін қолданыңыз.",
+                f"Қайта қош келдіңіз, {full_name}! (Таксист мәзірі)\nЛинияға шығу үшін басқару панелін қолданыңыз.",
                 reply_markup=get_driver_menu_kb()
             )
     else:
         # Жаңа қолданушы болса, рөл таңдауды ұсынамыз
         await message.answer(
-            "Ауыл такси ботына қош келдіңіз! 🚕\nЖалғастыру үшін рөліңізді таңдаңыз:",
+            "«Almaly auyly taxi qyzmeti» ботына қош келдіңіз! 🚕\nЖалғастыру үшін рөліңізді таңдаңыз:",
             reply_markup=get_start_kb()
         )
 
@@ -211,7 +216,7 @@ async def process_to_addr(message: Message, state: FSMContext):
 
     if user_data.get("order_type") == "intercity":
         await message.answer(
-            "Қала мен ауыл арасына базалық баға: <b>1500 тг</b>.\n"
+            "Қала мен ауыл арасына базалық баға: <b>2000 тг</b>.\n"
             "Такси тез табылуы үшін бағаны таңдаңыз немесе өз бағаңызды жазыңыз:",
             reply_markup=get_intercity_price_kb(),
             parse_mode="HTML"
@@ -236,10 +241,10 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
     price = int(price_text)
     data = await state.get_data()
 
-    # 🌟 ЖАҢА: Бағыт түрін алу (егер табылмаса, әдепкі бойынша 'local' болады)
+    # Бағыт түрін алу (егер табылмаса, әдепкі бойынша 'local' болады)
     order_type = data.get("order_type", "local")
 
-    # 🌟 ЖАҢА: МИНИМАЛДЫ БАҒАНЫ БАҒЫТҚА ҚАРАЙ ТЕКСЕРУ
+    # МИНИМАЛДЫ БАҒАНЫ БАҒЫТҚА ҚАРАЙ ТЕКСЕРУ
     min_price = 1500 if order_type == "intercity" else 300
 
     if price < min_price:
@@ -266,8 +271,12 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
     available_drivers = await get_available_drivers()
     drivers_count = len(available_drivers)
 
-    # 2. Заказды базаға тіркеу (🌟 order_type параметрі қосылды)
+    # 2. Заказды базаға тіркеу
     order_id = await create_order(client_id, data['from_addr'], data['to_addr'], price, order_type)
+
+    # 🌟 ЖАҢА: Заказ ешқандай таксистсіз түнде қалып қоймауы үшін 30 минуттық таймер қосамыз.
+    # Егер 30 минут ішінде ешкім қабылдамаса, бұл функция заказды автоматты түрде өшіреді.
+    asyncio.create_task(auto_cancel_waiting_order(order_id, bot, timeout_seconds=1800))
 
     # Тапсырысты жою батырмасы
     client_cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -291,7 +300,7 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
     await message.answer("Қосымша әрекеттер үшін төмендегі мәзірді қолданыңыз 👇", reply_markup=get_client_menu_kb())
     await state.clear()
 
-    # 🌟 ЖАҢА: Таксистерге баратын хабарламада бағытты анық көрсету
+    # Таксистерге баратын хабарламада бағытты анық көрсету
     route_label = "🏙 ҚАЛА АРАЛЫҚ (Атырау ↔ Алмалы)" if order_type == "intercity" else "🏘 АУЫЛ ІШІНДЕДЕГІ ТАПСЫРЫС"
 
     # 3. Бос таксистерге жіберілетін толық хабарлама мәтіні

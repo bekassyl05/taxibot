@@ -3,6 +3,7 @@ import asyncio
 import os
 from datetime import datetime, timedelta
 from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv, find_dotenv
 
 # .env файлын жүктеу
@@ -97,20 +98,20 @@ async def register_user(telegram_id: int, full_name: str, phone_number: str, rol
         await conn.close()
 
 
-async def register_driver(telegram_id: int, car_model: str, car_number: str):
-    """Жаңа таксисті көлік мәліметтерімен және тіркелген күнімен базаға сақтау"""
-    conn = await get_db_connection()
-    try:
-        reg_date = datetime.now().strftime("%Y-%m-%d %H:%M")
-        await conn.execute("""
-            INSERT INTO drivers (telegram_id, car_model, car_number, subscription_end, is_online, registration_date) 
-            VALUES ($1, $2, $3, NULL, 0, $4)
-            ON CONFLICT (telegram_id) DO UPDATE SET
-            car_model = EXCLUDED.car_model,
-            car_number = EXCLUDED.car_number;
-        """, telegram_id, car_model, car_number, reg_date)
-    finally:
-        await conn.close()
+# async def register_driver(telegram_id: int, car_model: str, car_number: str):
+#     """Жаңа таксисті көлік мәліметтерімен және тіркелген күнімен базаға сақтау"""
+#     conn = await get_db_connection()
+#     try:
+#         reg_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+#         await conn.execute("""
+#             INSERT INTO drivers (telegram_id, car_model, car_number, subscription_end, is_online, registration_date)
+#             VALUES ($1, $2, $3, NULL, 0, $4)
+#             ON CONFLICT (telegram_id) DO UPDATE SET
+#             car_model = EXCLUDED.car_model,
+#             car_number = EXCLUDED.car_number;
+#         """, telegram_id, car_model, car_number, reg_date)
+#     finally:
+#         await conn.close()
 
 
 async def register_driver_complete(telegram_id: int, car_model: str, car_number: str, full_name: str, phone_number: str,
@@ -118,17 +119,7 @@ async def register_driver_complete(telegram_id: int, car_model: str, car_number:
     """Жүргізушіні drivers кестесіне қосу және users кестесіндегі статусын толық жаңарту (PostgreSQL)"""
     conn = await get_db_connection()
     try:
-        # 1. Drivers кестесіне мәліметті сақтау немесе жаңарту
-        await conn.execute("""
-            INSERT INTO drivers (telegram_id, car_model, car_number, subscription_end, is_online, registration_date) 
-            VALUES ($1, $2, $3, NULL, 0, $4)
-            ON CONFLICT (telegram_id) DO UPDATE SET
-            car_model = EXCLUDED.car_model,
-            car_number = EXCLUDED.car_number,
-            registration_date = EXCLUDED.registration_date;
-        """, telegram_id, car_model, car_number, reg_date)
-
-        # 2. Пайдаланушының users кестесінде бар-жоғын тексеру
+        # 1. ЕҢ БІРІНШІ: Пайдаланушының users кестесінде бар-жоғын тексереміз немесе тіркейміз
         user_exists = await conn.fetchrow("SELECT telegram_id FROM users WHERE telegram_id = $1", telegram_id)
 
         if user_exists:
@@ -144,6 +135,16 @@ async def register_driver_complete(telegram_id: int, car_model: str, car_number:
                 INSERT INTO users (telegram_id, full_name, phone_number, is_client, is_driver, current_mode, registration_date) 
                 VALUES ($1, $2, $3, 0, 1, 'driver', $4);
             """, telegram_id, full_name, phone_number, reg_date)
+
+        # 2. ЕКІНШІ: Пайдаланушы users кестесіне нақты жазылғаннан кейін ғана drivers-қа қосамыз
+        await conn.execute("""
+            INSERT INTO drivers (telegram_id, car_model, car_number, subscription_end, is_online, registration_date) 
+            VALUES ($1, $2, $3, NULL, 0, $4)
+            ON CONFLICT (telegram_id) DO UPDATE SET
+            car_model = EXCLUDED.car_model,
+            car_number = EXCLUDED.car_number,
+            registration_date = EXCLUDED.registration_date;
+        """, telegram_id, car_model, car_number, reg_date)
 
     finally:
         await conn.close()
@@ -413,8 +414,39 @@ async def get_all_orders_admin() -> list:
         await conn.close()
 
 
-async def auto_cancel_order_after_timeout(order_id: int, bot: Bot, timeout_seconds: int = 600):
-    """Заказ белгіленген уақыт ішінде аяқталмаса, оны автоматты түрде жою фондық функциясы"""
+async def auto_cancel_waiting_order(order_id: int, bot: Bot, timeout_seconds: int = 1800):
+    """
+    1-ФУНКЦИЯ: Клиент заказ бергеннен кейін маңайда такси табылмаса,
+    белгілі бір уақыттан кейін (мысалы, 30 минут) заказды автоматты түрде жою.
+    """
+    await asyncio.sleep(timeout_seconds)
+
+    conn = await get_db_connection()
+    try:
+        row = await conn.fetchrow("SELECT status, client_id FROM orders WHERE order_id = $1", order_id)
+
+        # Егер 30 минуттан кейін де заказды ешқандай таксист алмаса (статус әлі 'waiting')
+        if row and row['status'] == 'waiting':
+            await conn.execute("UPDATE orders SET status = 'timeout_cancelled' WHERE order_id = $1", order_id)
+            client_id = row['client_id']
+
+            try:
+                await bot.send_message(
+                    chat_id=client_id,
+                    text=f"⏱ <b>№{order_id} Тапсырыс уақыты өтті.</b>\n"
+                         f"Кешіріңіз, қазіргі уақытта маңайда бос такси табылмағандықтан, тапсырысыңыз автоматты түрде жойылды."
+                )
+            except Exception:
+                pass
+    finally:
+        await conn.close()
+
+
+async def auto_complete_order_after_timeout(order_id: int, bot: Bot, timeout_seconds: int = 600):
+    """
+    ФОНДЫҚ ФУНКЦИЯ: Таксист заказды қабылдағаннан кейін белгіленген уақыт (10 немесе 60 мин) өтсе,
+    тапсырысты автоматты түрде ЖОЮ емес, АЯҚТАЛДЫ (completed) күйіне өткізу және таксисті линияға қайта қосу.
+    """
     await asyncio.sleep(timeout_seconds)
     minutes = timeout_seconds // 60
 
@@ -422,21 +454,51 @@ async def auto_cancel_order_after_timeout(order_id: int, bot: Bot, timeout_secon
     try:
         row = await conn.fetchrow("SELECT status, client_id, driver_id FROM orders WHERE order_id = $1", order_id)
 
-        if row and row[0] == 'accepted':
-            await conn.execute("UPDATE orders SET status = 'cancelled' WHERE order_id = $1", order_id)
-            client_id, driver_id = row[1], row[2]
+        # Егер уақыт өткенде статус әлі де 'accepted' болса (яғни таксист өздігінен жаппаған болса)
+        if row and row['status'] == 'accepted':
+            client_id = row['client_id']
+            driver_id = row['driver_id']
+
+            # 1. Тапсырысты базада 'completed' деп өзгертеміз
+            await conn.execute("UPDATE orders SET status = 'completed' WHERE order_id = $1", order_id)
+
+            # 2. МАНЫЗДЫ: Жүргізушіні базада қайтадан ЛИНЯҒА ҚОСАМЫЗ (белсенді қыламыз)
+            await conn.execute("UPDATE drivers SET is_online = 1 WHERE telegram_id = $1", driver_id)
+
+            # Клиентке арналған жұлдызшалар (бағалау клавиатурасы)
+            stars_kb = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="1 ⭐️", callback_data=f"rate_driver:{order_id}:1"),
+                    InlineKeyboardButton(text="2 ⭐️", callback_data=f"rate_driver:{order_id}:2"),
+                    InlineKeyboardButton(text="3 ⭐️", callback_data=f"rate_driver:{order_id}:3")
+                ],
+                [
+                    InlineKeyboardButton(text="4 ⭐️", callback_data=f"rate_driver:{order_id}:4"),
+                    InlineKeyboardButton(text="5 ⭐️", callback_data=f"rate_driver:{order_id}:5")
+                ]
+            ])
 
             try:
+                # Клиентке хабарлама жіберу
                 await bot.send_message(
                     chat_id=client_id,
-                    text=f"❌ <b>№{order_id} Тапсырыс жойылды.</b>\nТаксист {minutes} минут ішінде аяқтап үлгермеді."
+                    text=f"⏱ <b>Сапардың максималды уақыты өтті ({minutes} минут).</b>\n\n"
+                         f"Тапсырыс жүйеде автоматты түрде аяқталды деп белгіленді.\n"
+                         f"Сапарыңыз қалай өтті? Жүргізушіні бағалай аласыз ба? 👇",
+                    reply_markup=stars_kb,
+                    parse_mode="HTML"
                 )
+
+                # Таксистке хабарлама жіберу
                 await bot.send_message(
                     chat_id=driver_id,
-                    text=f"❌ <b>№{order_id} Тапсырыс уақыты бітті!</b>\nСіз тапсырысты {minutes} минут ішінде аяқтамадыңыз. Ол автоматты түрде жойылды."
+                    text=f"⏱ <b>Сапардың максималды уақыты бітті ({minutes} минут)!</b>\n\n"
+                         f"№{order_id} тапсырыс жүйе тарапынан автоматты түрде аяқталды.\n"
+                         f"Сіз қайтадан линиядасыз (жаңа заказдар қабылдауға дайынсыз). 🚕",
+                    parse_mode="HTML"
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Авто-аяқтау хабарламасын жіберуде қате: {e}")
     finally:
         await conn.close()
 

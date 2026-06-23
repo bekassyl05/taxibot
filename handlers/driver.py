@@ -1,4 +1,3 @@
-import aiosqlite
 import asyncio
 import html
 from aiogram import Router, F, Bot, types
@@ -8,11 +7,10 @@ from aiogram.fsm.state import StatesGroup, State
 from datetime import datetime, timedelta
 
 from config import ADMIN_ID
-# 🌟 ТҮЗЕТІЛДІ: auto_cancel_order_after_timeout осында импортталды
 from database.db import (
     check_driver_subscription, set_driver_online_status, update_order_status,
-    assign_order_to_driver, get_order_details, get_driver, get_user, get_waiting_orders,
-    auto_cancel_order_after_timeout, change_user_mode, register_driver_complete, get_db_connection
+    assign_order_to_driver, get_order_details, get_driver, get_user, get_waiting_orders, change_user_mode, register_driver_complete, get_db_connection,
+    auto_complete_order_after_timeout
 )
 from keyboards.inline import get_admin_sub_kb, get_driver_order_kb, get_client_decision_kb, get_broadcast_kb
 from keyboards.reply import get_client_menu_kb
@@ -56,24 +54,13 @@ async def process_driver_phone(message: Message, state: FSMContext):
     await state.set_state(DriverRegistration.waiting_for_car)
 
 
+# ✨ ТҮЗЕТІЛДІ: Қайталанып тұрған екі функция біріктіріліп, тазартылды
 @router.message(DriverRegistration.waiting_for_car)
 async def process_driver_car(message: Message, state: FSMContext):
     await state.update_data(driver_car=message.text)
-    await message.answer("Көліктің мемлекеттік нөмірін жазыңыз (мысалы: 123 ABC 06):")
-    await state.set_state(DriverRegistration.waiting_for_plate)
-
-
-@router.message(DriverRegistration.waiting_for_car)
-async def process_driver_car(message: Message, state: FSMContext):
-    # 1. Клиент жазған көлік маркасын ("Тойота") State-ке сақтаймыз
-    await state.update_data(driver_car=message.text)
-
-    # 2. Келесі қадам: Көліктің нөмірін сұраймыз
     await message.answer(
-        "Керемет! Енді көліктің мемлекеттік нөмірін жазыңыз (мысалы, 123 ABC 01):"
+        "Керемет! Енді көліктің мемлекеттік нөмірін жазыңыз (мысалы: 123 ABC 06):"
     )
-
-    # 3. Нөмір күтетін State-ке өткіземіз
     await state.set_state(DriverRegistration.waiting_for_plate)
 
 
@@ -83,7 +70,6 @@ async def process_driver_plate(message: Message, state: FSMContext):
     driver_plate = message.text
     user_data = await state.get_data()
 
-    # 🌟 1-ТҮЗЕТУ: KeyError алдын алу үшін .get() қолданамыз
     driver_name = user_data.get('driver_name', message.from_user.full_name)
     driver_phone = user_data.get('driver_phone', 'Көрсетілмеген')
     driver_car = user_data.get('driver_car', 'Белгісіз көлік')
@@ -91,23 +77,33 @@ async def process_driver_plate(message: Message, state: FSMContext):
 
     reg_date = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    await register_driver_complete(
-        telegram_id=driver_id,
-        car_model=driver_car,
-        car_number=driver_plate,
-        full_name=driver_name,
-        phone_number=driver_phone,
-        reg_date=reg_date
-    )
+    # 🔥 ТҮЗЕТІЛДІ: Базаға жазу кезінде қате шықса, бот үнсіз қалмай логқа жазады және чатқа ескертеді
+    try:
+        await register_driver_complete(
+            telegram_id=driver_id,
+            car_model=driver_car,
+            car_number=driver_plate,
+            full_name=driver_name,
+            phone_number=driver_phone,
+            reg_date=reg_date
+        )
+    except Exception as db_error:
+        print(f"❌ Дерекқорға сақтау кезінде қате шықты: {db_error}")
+        await message.answer(
+            f"❌ <b>Тіркелу сәтсіз аяқталды! Жүйелік қате.</b>\n"
+            f"Қате туралы мәлімет: <code>{db_error}</code>\n\n"
+            f"Өтініш, Render логтарын тексеріңіз немесе db.py-дегі деректер типін қараңыз.",
+            parse_mode="HTML"
+        )
+        return
 
-    # Таксист режимінің басты мәзірі (Сенің батырмаларың)
+    # Тек базаға сәтті сақталған жағдайда ғана төмендегі мәзір шығады:
     kb = [
         [KeyboardButton(text="🚕 Линияға шығу")],
         [KeyboardButton(text="👤 Клиент режиміне өту")]
     ]
     driver_menu_kb = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-    # 🌟 2-ТҮЗЕТУ: TypeError алдын алу.
     safe_name = html.escape(str(driver_name))
     safe_phone = html.escape(str(driver_phone))
     safe_car = html.escape(str(driver_car))
@@ -215,7 +211,6 @@ async def process_sub_choice(call: CallbackQuery, state: FSMContext):
         period = "1 апта"
         price = "3000"
 
-    # Таңдалған мерзімді сақтаймыз
     await state.update_data(sub_period=period)
     await state.set_state(PaymentState.waiting_for_pdf)
 
@@ -230,23 +225,19 @@ async def process_sub_choice(call: CallbackQuery, state: FSMContext):
 
 @router.message(PaymentState.waiting_for_pdf)
 async def handle_receipt_pdf(message: Message, state: FSMContext, bot: Bot):
-    """Тек қана PDF форматтағы чекті қабылдау және тариф мәліметін қосып админге жолдау"""
     if message.document and message.document.mime_type == "application/pdf":
         user_data = await state.get_data()
         period = user_data.get('sub_period', 'Белгісіз мерзім')
-
         user_id = message.from_user.id
 
-        # 🌟 БАЗАДАН АДАМНЫҢ АТЫН ЖӘНЕ ТЕЛЕФОНЫН АЛАМЫЗ
         user_info = await get_user(user_id)
         if user_info:
-            driver_name = user_info[1]  # Базада тіркелген толық аты
-            driver_phone = user_info[2]  # Базада тіркелген телефоны
+            driver_name = user_info[1]
+            driver_phone = user_info[2]
         else:
             driver_name = message.from_user.full_name
             driver_phone = "Белгісіз"
 
-        # Админге баратын мәтін (телефон нөмірі қосылды)
         admin_msg = (
             f"🆕 <b>ЖАҢА ТӨЛЕМ (PDF ЧЕК)!</b>\n\n"
             f"👤 Жүргізуші: <b>{driver_name}</b>\n"
@@ -262,9 +253,8 @@ async def handle_receipt_pdf(message: Message, state: FSMContext, bot: Bot):
             [InlineKeyboardButton(text="❌ Бас тарту", callback_data=f"sub_reject:{user_id}")]
         ])
 
-        # PDF жіберу
         await bot.send_document(
-            chat_id=ADMIN_ID,  # Өзіңіздің ADMIN_ID айнымалыңыз дұрыс тұрғанын тексеріңіз
+            chat_id=ADMIN_ID,
             document=message.document.file_id,
             caption=admin_msg,
             reply_markup=admin_kb,
@@ -279,19 +269,14 @@ async def handle_receipt_pdf(message: Message, state: FSMContext, bot: Bot):
         )
 
 
-# --- ТАПСЫРЫСТЫҢ КЕЗЕҢДЕРІ МЕН ТӨЛЕМДІ РАСТАУ (CALLBACKS) ---
-
-# 🌟 ТҮЗЕТІЛДІ: Атауы қайталанбас үшін process_order_payment_pending деп өзгертілді
 @router.callback_query(F.data.startswith("order_finish:"))
 async def process_order_payment_pending(callback: CallbackQuery):
-    """Таксист 'Мекенжайға жеттік' батырмасын басқанда"""
     order_id = int(callback.data.split(":")[1])
-
     await update_order_status(order_id, "payment_pending")
 
     await callback.message.edit_text(
         "🏁 Сіз мекенжайға жеттіңіз.\n"
-        "Клиент сізге Каспий немесе қолма-қол ақша аударған соң, төмендегі батырманы басыңыз.\n"
+        "Клиент сізге Kaspi немесе қолма-қол ақша аударған соң, төмендегі батырманы басыңыз.\n"
         "⚠️ Назар аударыңыз! Төлемді растамайынша жаңа заказ ала алмайсыз!",
         reply_markup=get_driver_order_kb(order_id, "payment_pending")
     )
@@ -300,18 +285,17 @@ async def process_order_payment_pending(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("order_paid:"))
 async def process_order_paid(call: CallbackQuery, bot: Bot):
-    """Таксист 'Төлемді растау' басқанда (САПАРДЫ ТОЛЫҚ ЖАБУ + 4 МИНУТТЫҚ ТЕКСЕРІС)"""
     data_parts = call.data.split(":")
     order_id = int(data_parts[1])
+    driver_id = call.from_user.id  # Жүргізушінің Telegram ID-сі
 
     order_info = await get_order_details(order_id)
     if not order_info:
-        await call.answer("Тапсырыс табылмады!", show_alert=True)
+        await call.answer("Тапсырыс табылдамады!", show_alert=True)
         return
 
     client_id = order_info[5]
 
-    # 🔥 ЖАҢА ПОСТГРЕС БЛОГЫ (Ескі aiosqlite-тің орнына)
     conn = await get_db_connection()
     try:
         row = await conn.fetchrow("SELECT created_at FROM orders WHERE order_id = $1", order_id)
@@ -321,12 +305,10 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
 
     if created_at_val:
         try:
-            # PostgreSQL-де TIMESTAMP типі автоматты түрде Python-ның datetime объектісі болып келеді.
-            # Сондықтан оның типі мәтін бе, әлде дайын уақыт па — тексеріп аламыз:
             if isinstance(created_at_val, str):
                 created_time = datetime.strptime(created_at_val[:19], "%Y-%m-%d %H:%M:%S")
             else:
-                created_time = created_at_val  # Егер дайын datetime объектісі болса
+                created_time = created_at_val
 
             now = datetime.now()
             seconds_passed = (now - created_time).total_seconds()
@@ -337,7 +319,7 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
 
                 await call.answer(
                     f"🛑 Сапарды аяқтауға әлі ерте!\n\n"
-                    f"Жүйе қауіпсіздігі үшін сапар кемінде 4 минутқа созылуы керек. "
+                    f"Жүйе қауіпсіздігі үшін saпар кемінде 4 минутқа созылуы керек. "
                     f"Тағы шамамен {remaining_minutes} минут күте тұрыңыз.",
                     show_alert=True
                 )
@@ -346,9 +328,19 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
         except Exception as e:
             print(f"Уақытты есептеуде қате шықты: {e}")
 
+    # 1. Заказды сәтті жабамыз
     await update_order_status(order_id, 'completed')
 
-    await call.answer("Төлем расталды! Тапсырыс жабылды.")
+    # Базада жүргізушіні ресми түрде ЛИНЯҒА ҚАЙТА ҚОСАМЫЗ (Енді ол бос!)
+    await set_driver_online_status(driver_id, 1)
+
+    # 🌟 ТҮЗЕТІЛГЕН ЖЕРІ ОСЫ:
+    # Егер батырма басылғаннан кейін 10 секундтан көп уақыт өтіп кетсе де,
+    # бот құлап қалмауы үшін call.answer-ді қателіктерден қорғаймыз.
+    try:
+        await call.answer("Төлем расталды! Тапсырыс жабылды.")
+    except Exception:
+        pass  # Егер Telegram "сұраныс ескірді" десе, оны жай ғана өткізіп жібереді
 
     await call.message.edit_text(
         f"✅ <b>Тапсырыс №{order_id} толықтай аяқталды!</b>\n\n"
@@ -382,7 +374,7 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
 
         if waiting_orders:
             await bot.send_message(
-                chat_id=call.from_user.id,
+                chat_id=driver_id,
                 text="🔔 <b>Кезекте күтіп тұрған жаңа тапсырыстар бар:</b>",
                 parse_mode="HTML"
             )
@@ -400,27 +392,23 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
                 )
 
                 await bot.send_message(
-                    chat_id=call.from_user.id,
+                    chat_id=driver_id,
                     text=order_text,
                     reply_markup=get_broadcast_kb(w_order_id, w_price),
                     parse_mode="HTML"
                 )
         else:
             await bot.send_message(
-                chat_id=call.from_user.id,
+                chat_id=driver_id,
                 text="🚕 Қазіргі уақытта жаңа тапсырыстар жоқ. Линияда күте тұрыңыз."
             )
 
     except Exception as e:
         print(f"Клиентке хабарлама жіберуде қате шықты: {e}")
 
-# 🌟 ТҮЗЕТІЛДІ: Бұл жердегі ескі auto_cancel_order_after_timeout функциясы өшірілді,
-# себебі ол db.py файлынан импортталып тұр!
-
 
 @router.callback_query(F.data.startswith("take_order:"))
 async def accept_order_directly(callback: CallbackQuery, bot: Bot):
-    """Таксист клиенттің бастапқы бағасына келіскенде"""
     _, order_id, price = callback.data.split(":")
     order_id, price = int(order_id), int(price)
     driver_id = callback.from_user.id
@@ -435,6 +423,7 @@ async def accept_order_directly(callback: CallbackQuery, bot: Bot):
 
         order_type = order_info[6] if len(order_info) > 6 else "local"
 
+        # Сен жазған тамаша уақытты бөлу логикасы 👏
         timeout_minutes = 60 if order_type == "intercity" else 10
         timeout_seconds = timeout_minutes * 60
         deadline_time = (datetime.now() + timedelta(minutes=timeout_minutes)).strftime("%H:%M")
@@ -442,7 +431,7 @@ async def accept_order_directly(callback: CallbackQuery, bot: Bot):
         await callback.message.edit_text(
             f"✅ <b>Заказ қабылданды!</b>\n\n"
             f"⏱ <b>Аяқтау уақыты:</b> {deadline_time}-ге дейін.\n"
-            f"⚠️ Сапарды макс. {timeout_minutes} минут ішінде аяқтауыңыз керек (ерте бітіруге болады).\n\n"
+            f"⚠️ Сапарды макс. {timeout_minutes} минут ішінде аяқтауыңыз керек (кемі 4 минуттан кейін аяқтауға болады).\n\n"
             f"👤 Клиент: {client_name}\n"
             f"📱 Телефон: {client_phone}\n"
             f"📍 Қайдан: {order_info[0]}\n"
@@ -458,7 +447,6 @@ async def accept_order_directly(callback: CallbackQuery, bot: Bot):
 
         driver_info = await get_driver(driver_id)
         car_model = driver_info[1] if driver_info else "Анықталмады"
-        # 🌟 Мемлекеттік нөмір де дәл осылай car_number 2-орында тұр (telegram_id=0, car_model=1, car_number=2)
         car_number = driver_info[2] if driver_info else "Анықталмады"
 
         await bot.send_message(
@@ -473,8 +461,9 @@ async def accept_order_directly(callback: CallbackQuery, bot: Bot):
             parse_mode="HTML"
         )
 
-        # 🚀 ТҮЗЕТІЛГЕН ФОНДЫҚ ТАЙМЕР
-        asyncio.create_task(auto_cancel_order_after_timeout(order_id, bot, timeout_seconds))
+        # 🌟 Бұл жерде таксист қабылдағаннан кейінгі 10 немесе 60 минуттық таймер іске қосылады
+        asyncio.create_task(auto_complete_order_after_timeout(order_id, bot, timeout_seconds))
+
 
     else:
         await callback.message.edit_text("❌ Кешіріңіз, бұл заказды басқа таксист алып қойды.")
@@ -483,7 +472,6 @@ async def accept_order_directly(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("offer:"))
 async def offer_new_price(callback: CallbackQuery, bot: Bot):
-    """Таксист бағаны +50, +100, +150 көтергенде"""
     _, order_id, new_price = callback.data.split(":")
     order_id, new_price = int(order_id), int(new_price)
     driver_id = callback.from_user.id
@@ -513,7 +501,6 @@ async def offer_new_price(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("order_arrived:"))
 async def process_driver_arrived(call: CallbackQuery, bot: Bot):
-    """Таксист мекенжайға келіп, 'Клиентке келдім' батырмасын басқанда"""
     data_parts = call.data.split(":")
     order_id = int(data_parts[1])
     driver_id = call.from_user.id
@@ -524,8 +511,7 @@ async def process_driver_arrived(call: CallbackQuery, bot: Bot):
         return
 
     client_id = order_info[5]
-
-    await call.answer("Клиентке хабарлама жіберілді")
+    await call.answer("Клиентке хабарлама жітелді")
 
     await call.message.edit_text(
         f"🚖 <b>Тапсырыс №{order_id}</b>\n\n"
@@ -552,7 +538,6 @@ async def process_driver_arrived(call: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("client_onboard:"))
 async def process_client_onboard(call: CallbackQuery, bot: Bot):
-    """Клиент 'Таксиге отырдым' батырмасын басқанда"""
     data_parts = call.data.split(":")
     order_id = int(data_parts[1])
     driver_id = int(data_parts[2])
@@ -583,7 +568,6 @@ async def process_client_onboard(call: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("complete_order:"))
 async def process_order_finish(call: CallbackQuery, bot: Bot):
-    """Таксист 'Тапсырысты аяқтау' басқанда (ТӨЛЕМ КҮТУ ҚАДАМЫ)"""
     data_parts = call.data.split(":")
     order_id = int(data_parts[1])
 
@@ -593,7 +577,6 @@ async def process_order_finish(call: CallbackQuery, bot: Bot):
         return
 
     client_id = order_info[5]
-
     await call.answer("Клиенттен төлем күтілуде...")
 
     payment_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -623,12 +606,8 @@ async def process_order_finish(call: CallbackQuery, bot: Bot):
 @router.message(F.text == "👤 Клиент режиміне өту")
 async def switch_to_client_mode(message: Message):
     user_id = message.from_user.id
-
-    # 1. Базадағы қазіргі режимін 'client' етіп өзгертеміз
     await change_user_mode(user_id, 'client')
-
-    # 2. Клиенттің клавиатурасын жібереміз
     await message.answer(
         "👤 Сіз клиент режиміне өттіңіз! Жолға шығу үшін заказ бере аласыз.",
-        reply_markup=get_client_menu_kb()  # Клиент клавиатурасын шақырамыз
+        reply_markup=get_client_menu_kb()
     )

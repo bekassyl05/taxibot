@@ -22,16 +22,16 @@ class AdminBroadcast(StatesGroup):
 
 # --- АДМИН ПАНЕЛІНЕ КІРУ ---
 
-@router.message(Command("admin"), StateFilter(any_state))
+@router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext):
     """Тек бастық қана кіре алатын мәзір"""
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ Бұл бөлімге кіруге құқығыңыз жоқ.")
         return
 
-    await state.clear()  # Админ панеліне өткенде клиенттік/таксистік state-терді тазалау
+    await state.clear()  # Админ панеліне өткенде ескі state-терді өшіру
     await message.answer(
-        "👋 Қош келдіңіз, Бастық!\nБасқару панелі қосылды. Төмендегі батырмаларды қолданыңыз:",
+        "👋 Қош келдіңіз, Эльмира!\nБасқару панелі қосылды. Төмендегі батырмаларды қолданыңыз:",
         reply_markup=get_admin_menu_kb()
     )
 
@@ -318,7 +318,7 @@ async def reject_subscription(callback: CallbackQuery, bot: Bot):
             chat_id=driver_id,
             text="❌ <b>Кешіріңіз, админ сіздің төлеміңізді растамады.</b>\n"
                  "Сіз жіберген чек жарамсыз немесе сомасы қате болуы мүмкін. "
-                 "Қайтадан дұрыс PDF чек жіберіңіз немесе бастыққа хабарласыңыз.",
+                 "Қайтадан дұрыс PDF чек жіберіңіз немесе админге хабарласыңыз.",
             parse_mode="HTML"
         )
     except Exception:

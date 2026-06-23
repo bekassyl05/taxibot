@@ -36,9 +36,9 @@ async def main():
         BotCommand(command="admin", description="Бастық панелі (Тек әкімшіге)")
     ])
 
+    dp.include_router(admin.router)
     dp.include_router(client.router)
     dp.include_router(driver.router)
-    dp.include_router(admin.router)
 
     logging.info("Бот іске қосылды және хабарламаларды күтуде...")
 
