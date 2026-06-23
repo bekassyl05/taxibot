@@ -149,8 +149,14 @@ async def go_online(message: Message, state: FSMContext):
                 f"Олар төменде көрсетілді 👇"
             )
             for order in waiting_orders:
-                # 🌟 ТҮЗЕТІЛДІ: Ең соңына order_type айнымалысын қостық (енді 7 мән алынады)
-                order_id, from_addr, to_addr, price, client_name, client_phone, order_type = order
+                # 🌟 ҚАУІПСІЗ ТӘСІЛ: Мәліметтерді индекс арқылы ажыратамыз
+                order_id = order[0]
+                from_addr = order[1]
+                to_addr = order[2]
+                price = order[3]
+                client_name = order[4]
+                client_phone = order[5]
+                order_type = order[6] if len(order) > 6 else "local"
 
                 # Хабарламада бағытты анық көрсету үшін белгі қосамыз
                 route_label = "🏙 ҚАЛА АРАЛЫҚ" if order_type == "intercity" else "🏘 АУЫЛ ІШІ"
@@ -168,12 +174,11 @@ async def go_online(message: Message, state: FSMContext):
                     await message.bot.send_message(
                         chat_id=message.from_user.id,
                         text=order_text,
-                        # 🌟 ТҮЗЕТІЛДІ: Батырмаға тапсырыс түрін (order_type) беріп жібереміз
                         reply_markup=get_broadcast_kb(order_id, price, order_type=order_type),
                         parse_mode="HTML"
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Хабарлама жіберуде қате: {e}")
     else:
         sub_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="1 күн - 500 тг", callback_data="buy_sub_day")],
@@ -381,10 +386,15 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
                 parse_mode="HTML"
             )
             for w_order in waiting_orders:
-                # 🌟 ТҮЗЕТІЛДІ: Ең соңына w_type айнымалысын қостық (7 мән)
-                w_order_id, w_from, w_to, w_price, w_client_name, w_client_phone, w_type = w_order
+                # 🌟 ҚАУІПСІЗ ТӘСІЛ: Мәліметтерді индекс арқылы бөліп алу
+                w_order_id = w_order[0]
+                w_from = w_order[1]
+                w_to = w_order[2]
+                w_price = w_order[3]
+                w_client_name = w_order[4]
+                w_client_phone = w_order[5]
+                w_type = w_order[6] if len(w_order) > 6 else "local"
 
-                # Хабарламада бағытты анық көрсету үшін белгі қосамыз
                 w_route_label = "🏙 ҚАЛА АРАЛЫҚ" if w_type == "intercity" else "🏘 АУЫЛ ІШІ"
 
                 order_text = (
@@ -397,13 +407,15 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
                     f"👇 <i>Заказды алғыңыз келсе, батырманы басыңыз:</i>"
                 )
 
-                await bot.send_message(
-                    chat_id=driver_id,
-                    text=order_text,
-                    # 🌟 ТҮЗЕТІЛДІ: Батырмаға базадан келген w_type мәнін беріп жібереміз
-                    reply_markup=get_broadcast_kb(w_order_id, w_price, order_type=w_type),
-                    parse_mode="HTML"
-                )
+                try:
+                    await bot.send_message(
+                        chat_id=driver_id,
+                        text=order_text,
+                        reply_markup=get_broadcast_kb(w_order_id, w_price, order_type=w_type),
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    print(f"Кезектегі хабарламаны жіберу қатесі: {e}")
         else:
             await bot.send_message(
                 chat_id=driver_id,

@@ -321,9 +321,8 @@ async def get_recent_orders(limit: int = 5):
 async def get_waiting_orders():
     conn = await get_db_connection()
     try:
-        # 🌟 SQL сұраныстың ішіне o.order_type бағанын қосамыз
         rows = await conn.fetch("""
-            SELECT o.order_id, o.from_addr, o.to_addr, o.price, u.full_name, u.phone_number, o.order_type 
+            SELECT o.order_id, o.from_address, o.to_address, o.price, u.full_name, u.phone_number, o.order_type 
             FROM orders o
             JOIN users u ON o.client_id = u.telegram_id
             WHERE o.status = 'waiting'
