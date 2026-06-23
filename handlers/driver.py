@@ -149,10 +149,14 @@ async def go_online(message: Message, state: FSMContext):
                 f"Олар төменде көрсетілді 👇"
             )
             for order in waiting_orders:
-                order_id, from_addr, to_addr, price, client_name, client_phone = order
+                # 🌟 ТҮЗЕТІЛДІ: Ең соңына order_type айнымалысын қостық (енді 7 мән алынады)
+                order_id, from_addr, to_addr, price, client_name, client_phone, order_type = order
+
+                # Хабарламада бағытты анық көрсету үшін белгі қосамыз
+                route_label = "🏙 ҚАЛА АРАЛЫҚ" if order_type == "intercity" else "🏘 АУЫЛ ІШІ"
 
                 order_text = (
-                    f"🚨 <b>БӨГЕЛГЕН ТАПСЫРЫС (№{order_id})</b>\n\n"
+                    f"🚨 <b>БӨГЕЛГЕН ТАПСЫРЫС (№{order_id}) — {route_label}</b>\n\n"
                     f"📍 Қайдан: <b>{from_addr}</b>\n"
                     f"🏁 Қайда: <b>{to_addr}</b>\n"
                     f"💰 Бағасы: <b>{price} тг</b>\n\n"
@@ -164,7 +168,8 @@ async def go_online(message: Message, state: FSMContext):
                     await message.bot.send_message(
                         chat_id=message.from_user.id,
                         text=order_text,
-                        reply_markup=get_broadcast_kb(order_id, price),
+                        # 🌟 ТҮЗЕТІЛДІ: Батырмаға тапсырыс түрін (order_type) беріп жібереміз
+                        reply_markup=get_broadcast_kb(order_id, price, order_type=order_type),
                         parse_mode="HTML"
                     )
                 except Exception:
@@ -319,7 +324,7 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
 
                 await call.answer(
                     f"🛑 Сапарды аяқтауға әлі ерте!\n\n"
-                    f"Жүйе қауіпсіздігі үшін saпар кемінде 4 минутқа созылуы керек. "
+                    f"Жүйе қауіпсіздігі үшін сапар кемінде 4 минутқа созылуы керек. "
                     f"Тағы шамамен {remaining_minutes} минут күте тұрыңыз.",
                     show_alert=True
                 )
@@ -334,13 +339,10 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
     # Базада жүргізушіні ресми түрде ЛИНЯҒА ҚАЙТА ҚОСАМЫЗ (Енді ол бос!)
     await set_driver_online_status(driver_id, 1)
 
-    # 🌟 ТҮЗЕТІЛГЕН ЖЕРІ ОСЫ:
-    # Егер батырма басылғаннан кейін 10 секундтан көп уақыт өтіп кетсе де,
-    # бот құлап қалмауы үшін call.answer-ді қателіктерден қорғаймыз.
     try:
         await call.answer("Төлем расталды! Тапсырыс жабылды.")
     except Exception:
-        pass  # Егер Telegram "сұраныс ескірді" десе, оны жай ғана өткізіп жібереді
+        pass
 
     await call.message.edit_text(
         f"✅ <b>Тапсырыс №{order_id} толықтай аяқталды!</b>\n\n"
@@ -379,10 +381,14 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
                 parse_mode="HTML"
             )
             for w_order in waiting_orders:
-                w_order_id, w_from, w_to, w_price, w_client_name, w_client_phone = w_order
+                # 🌟 ТҮЗЕТІЛДІ: Ең соңына w_type айнымалысын қостық (7 мән)
+                w_order_id, w_from, w_to, w_price, w_client_name, w_client_phone, w_type = w_order
+
+                # Хабарламада бағытты анық көрсету үшін белгі қосамыз
+                w_route_label = "🏙 ҚАЛА АРАЛЫҚ" if w_type == "intercity" else "🏘 АУЫЛ ІШІ"
 
                 order_text = (
-                    f"🚨 <b>БӨГЕЛГЕН ТАПСЫРЫС (№{w_order_id})</b>\n\n"
+                    f"🚨 <b>БӨГЕЛГЕН ТАПСЫРЫС (№{w_order_id}) — {w_route_label}</b>\n\n"
                     f"📍 Қайдан: <b>{w_from}</b>\n"
                     f"🏁 Қайда: <b>{w_to}</b>\n"
                     f"💰 Бағасы: <b>{w_price} тг</b>\n\n"
@@ -394,7 +400,8 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
                 await bot.send_message(
                     chat_id=driver_id,
                     text=order_text,
-                    reply_markup=get_broadcast_kb(w_order_id, w_price),
+                    # 🌟 ТҮЗЕТІЛДІ: Батырмаға базадан келген w_type мәнін беріп жібереміз
+                    reply_markup=get_broadcast_kb(w_order_id, w_price, order_type=w_type),
                     parse_mode="HTML"
                 )
         else:

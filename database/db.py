@@ -318,16 +318,18 @@ async def get_recent_orders(limit: int = 5):
         await conn.close()
 
 
-async def get_waiting_orders() -> list:
-    """Күту режимінде тұрған барлық белсенді заказдарды алу"""
+async def get_waiting_orders():
     conn = await get_db_connection()
     try:
-        return await conn.fetch("""
-            SELECT o.order_id, o.from_address, o.to_address, o.price, u.full_name, u.phone_number 
+        # 🌟 SQL сұраныстың ішіне o.order_type бағанын қосамыз
+        rows = await conn.fetch("""
+            SELECT o.order_id, o.from_addr, o.to_addr, o.price, u.full_name, u.phone_number, o.order_type 
             FROM orders o
             JOIN users u ON o.client_id = u.telegram_id
-            WHERE o.status = 'waiting';
+            WHERE o.status = 'waiting'
+            ORDER BY o.created_at DESC
         """)
+        return rows
     finally:
         await conn.close()
 

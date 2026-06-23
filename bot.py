@@ -1,12 +1,12 @@
 import asyncio
 import logging
-import os  # 🌟 Жаңа импорт
+import os  #
 from aiogram.types import BotCommand
 from aiogram import Bot, Dispatcher
 from config import BOT_TOKEN
 from database.db import init_db
 from handlers import client, driver, admin
-from aiohttp import web  # 🌟 Жаңа импорт
+from aiohttp import web  #
 
 logging.basicConfig(level=logging.INFO)
 

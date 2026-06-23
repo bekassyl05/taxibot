@@ -27,15 +27,27 @@ def get_driver_order_kb(order_id: int, current_stage: str):
 
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-def get_broadcast_kb(order_id: int, current_price: int):
-    """Таксистке заказ келгенде шығатын батырмалар"""
+
+def get_broadcast_kb(order_id: int, current_price: int, order_type: str = "village"):
+    """Таксистке заказ келгенде шығатын батырмалар (Ауыл іші мен Қалааралыққа байланысты өзгереді)"""
+
+    if order_type == "intercity":
+        # 🏙 Қала мен ауыл арасындағы заказ үшін (+500, +1000 тг)
+        bump_buttons = [
+            InlineKeyboardButton(text="+500 тг", callback_data=f"offer:{order_id}:{current_price + 500}"),
+            InlineKeyboardButton(text="+1000 тг", callback_data=f"offer:{order_id}:{current_price + 1000}")
+        ]
+    else:
+        # 🏘 Ауыл ішіндегі заказ үшін (+100, +200, +300 тг)
+        bump_buttons = [
+            InlineKeyboardButton(text="+100 тг", callback_data=f"offer:{order_id}:{current_price + 100}"),
+            InlineKeyboardButton(text="+200 тг", callback_data=f"offer:{order_id}:{current_price + 200}"),
+            InlineKeyboardButton(text="+300 тг", callback_data=f"offer:{order_id}:{current_price + 300}")
+        ]
+
     kb = [
         [InlineKeyboardButton(text="✅ Осы бағаға қабылдау", callback_data=f"take_order:{order_id}:{current_price}")],
-        [
-            InlineKeyboardButton(text="+50 тг", callback_data=f"offer:{order_id}:{current_price + 50}"),
-            InlineKeyboardButton(text="+100 тг", callback_data=f"offer:{order_id}:{current_price + 100}"),
-            InlineKeyboardButton(text="+150 тг", callback_data=f"offer:{order_id}:{current_price + 150}")
-        ]
+        bump_buttons  # Динамикалық түрде таңдалған баға қосу батырмалары
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 

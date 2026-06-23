@@ -121,8 +121,7 @@ def get_intercity_dir_kb():
 def get_intercity_price_kb():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="1500"), KeyboardButton(text="1700")],
-            [KeyboardButton(text="2000"), KeyboardButton(text="2500")]
+            [KeyboardButton(text="1500"), KeyboardButton(text="2000")]
         ], resize_keyboard=True
     )
 
@@ -259,7 +258,7 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
 
     client_id = message.from_user.id
 
-    # 1. Базадан клиенттің аты-жөні мен телефонын алдын ала аламыз
+    # 1. Базадан client-тің аты-жөні мен телефонын алдын ала аламыз
     user_info = await get_user(client_id)
     if not user_info:
         await message.answer("Қате! Пайдаланушы базадан табылмады. Қайта тіркеліңіз /start")
@@ -274,8 +273,7 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
     # 2. Заказды базаға тіркеу
     order_id = await create_order(client_id, data['from_addr'], data['to_addr'], price, order_type)
 
-    # 🌟 ЖАҢА: Заказ ешқандай таксистсіз түнде қалып қоймауы үшін 30 минуттық таймер қосамыз.
-    # Егер 30 минут ішінде ешкім қабылдамаса, бұл функция заказды автоматты түрде өшіреді.
+    # 🌟 Заказ ешқандай таксистсіз түнде қалып қоймауы үшін 30 минуттық таймер
     asyncio.create_task(auto_cancel_waiting_order(order_id, bot, timeout_seconds=1800))
 
     # Тапсырысты жою батырмасы
@@ -321,7 +319,8 @@ async def process_price(message: Message, state: FSMContext, bot: Bot):
             await bot.send_message(
                 chat_id=driver_id,
                 text=order_text,
-                reply_markup=get_broadcast_kb(order_id, price),
+                # 🌟 ТҮЗЕТІЛДІ: Енді үшінші параметр ретінде order_type мәні беріледі!
+                reply_markup=get_broadcast_kb(order_id, price, order_type=order_type),
                 parse_mode="HTML"
             )
         except Exception:
@@ -398,51 +397,51 @@ async def process_accept_offer(call: CallbackQuery, bot: Bot):
         pass
 
 
-@router.callback_query(F.data.startswith("reject_offer:"))
-async def process_reject_offer(call: CallbackQuery, bot: Bot):
-    """Клиент таксистің бағасынан бас тартқанда"""
-    data_parts = call.data.split(":")
-    order_id = int(data_parts[1])
-    driver_id = int(data_parts[2])
-
-    await call.answer("Бағадан бас тартылды")
-
-    # 1. Клиенттің экранындағы мәтінді жаңартамыз (әдемі көрінуі үшін HTML қостық)
-    await call.message.edit_text(
-        "❌ <b>Сіз таксистің бұл баға ұсынысынан бас тарттыңыз.</b>\n"
-        "Басқа жүргізушілерден ұсыныс күтілуде... ⏳",
-        parse_mode="HTML"
-    )
-
-    # 2. Базадан тапсырыстың БАСТАПҚЫ мәліметтерін (адрестері мен бағасын) аламыз
-    order_info = await get_order_details(order_id)
-
-    if order_info:
-        from_addr = order_info[0]
-        to_addr = order_info[1]
-        original_price = order_info[2]  # Клиенттің ең басында қойған бағасы (мысалы: 500)
-        client_name = order_info[3]
-
-        # 3. Таксистке "Клиент көнбеді, бірақ бастапқы бағамен ала аласыз" деп хабарлама дайындаймыз
-        driver_msg = (
-            f"😔 <b>Тапсырыс №{order_id}:</b> Клиент сіз ұсынған бағаға келіспеді.\n\n"
-            f"👇 Бірақ бұл тапсырыс әлі де ашық. Оны <b>бастапқы бағасымен</b> қабылдағыңыз келсе, төменді басыңыз:\n\n"
-            f"📍 Қайдан: <b>{from_addr}</b>\n"
-            f"🏁 Қайда: <b>{to_addr}</b>\n"
-            f"💰 Бағасы: <b>{original_price} тг</b>\n\n"
-            f"👤 Клиент: <b>{client_name}</b>"
-        )
-
-        # 4. Таксистке хабарлама мен батырмаларды қайта жібереміз
-        try:
-            await bot.send_message(
-                chat_id=driver_id,
-                text=driver_msg,
-                reply_markup=get_broadcast_kb(order_id, original_price),  # Бастапқы бағамен батырмаларды қайтарамыз
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
+# @router.callback_query(F.data.startswith("reject_offer:"))
+# async def process_reject_offer(call: CallbackQuery, bot: Bot):
+#     """Клиент таксистің бағасынан бас тартқанда"""
+#     data_parts = call.data.split(":")
+#     order_id = int(data_parts[1])
+#     driver_id = int(data_parts[2])
+#
+#     await call.answer("Бағадан бас тартылды")
+#
+#     # 1. Клиенттің экранындағы мәтінді жаңартамыз (әдемі көрінуі үшін HTML қостық)
+#     await call.message.edit_text(
+#         "❌ <b>Сіз таксистің бұл баға ұсынысынан бас тарттыңыз.</b>\n"
+#         "Басқа жүргізушілерден ұсыныс күтілуде... ⏳",
+#         parse_mode="HTML"
+#     )
+#
+#     # 2. Базадан тапсырыстың БАСТАПҚЫ мәліметтерін (адрестері мен бағасын) аламыз
+#     order_info = await get_order_details(order_id)
+#
+#     if order_info:
+#         from_addr = order_info[0]
+#         to_addr = order_info[1]
+#         original_price = order_info[2]  # Клиенттің ең басында қойған бағасы (мысалы: 500)
+#         client_name = order_info[3]
+#
+#         # 3. Таксистке "Клиент көнбеді, бірақ бастапқы бағамен ала аласыз" деп хабарлама дайындаймыз
+#         driver_msg = (
+#             f"😔 <b>Тапсырыс №{order_id}:</b> Клиент сіз ұсынған бағаға келіспеді.\n\n"
+#             f"👇 Бірақ бұл тапсырыс әлі де ашық. Оны <b>бастапқы бағасымен</b> қабылдағыңыз келсе, төменді басыңыз:\n\n"
+#             f"📍 Қайдан: <b>{from_addr}</b>\n"
+#             f"🏁 Қайда: <b>{to_addr}</b>\n"
+#             f"💰 Бағасы: <b>{original_price} тг</b>\n\n"
+#             f"👤 Клиент: <b>{client_name}</b>"
+#         )
+#
+#         # 4. Таксистке хабарлама мен батырмаларды қайта жібереміз
+#         try:
+#             await bot.send_message(
+#                 chat_id=driver_id,
+#                 text=driver_msg,
+#                 reply_markup=get_broadcast_kb(order_id, original_price),  # Бастапқы бағамен батырмаларды қайтарамыз
+#                 parse_mode="HTML"
+#             )
+#         except Exception:
+#             pass
 
 @router.callback_query(F.data.startswith("cancel_my_order:"))
 async def process_client_cancel_order(call: CallbackQuery):
