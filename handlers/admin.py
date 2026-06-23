@@ -5,11 +5,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State, any_state
 import asyncio
 import aiosqlite
-from database.db import DB_PATH
 from config import ADMIN_ID
 from database.db import (
     update_driver_subscription, get_general_statistics, get_recent_orders,
-    get_all_drivers_admin, get_all_clients_admin, get_all_orders_admin
+    get_all_drivers_admin, get_all_clients_admin, get_all_orders_admin, get_db_connection
 )
 from keyboards.reply import get_admin_menu_kb
 
@@ -215,24 +214,28 @@ async def process_broadcast(message: Message, state: FSMContext, bot: Bot):
     success_count = 0
     error_count = 0
 
-    # Дерекқордан таңдалған аудиторияға қарай ID-лерді алу
-    async with aiosqlite.connect(DB_PATH) as db:
+    # 🔥 ЖАҢА ПОСТГРЕС БЛОГЫ (aiosqlite пен DB_PATH толық жойылды)
+    conn = await get_db_connection()
+    try:
         if target == "all":
             query = "SELECT telegram_id FROM users"
         elif target == "driver":
-            query = "SELECT telegram_id FROM users WHERE role = 'driver'"
+            # Жаңа базаның құрылымы бойынша: is_driver = 1
+            query = "SELECT telegram_id FROM users WHERE is_driver = 1"
         elif target == "client":
-            query = "SELECT telegram_id FROM users WHERE role = 'client'"
+            # Жаңа базаның құрылымы бойынша: is_client = 1
+            query = "SELECT telegram_id FROM users WHERE is_client = 1"
 
-        async with db.execute(query) as cursor:
-            users = await cursor.fetchall()
+        users = await conn.fetch(query)
+    finally:
+        await conn.close()
 
     if not users:
         await message.answer("❌ Бұл санатта ешқандай пайдаланушы табылмады.")
         await state.clear()
         return
 
-    # Тарату циклі
+    # Тарату циклі (Өзгеріссіз қалады, өйткені asyncpg-де де row[0] түрінде ID алынады)
     for row in users:
         user_id = row[0]
         try:
