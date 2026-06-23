@@ -28,7 +28,7 @@ def get_driver_order_kb(order_id: int, current_stage: str):
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
-def get_broadcast_kb(order_id: int, current_price: int, order_type: str = "village"):
+def get_broadcast_kb(order_id: int, current_price: int, order_type: str = "local"):
     """Таксистке заказ келгенде шығатын батырмалар (Ауыл іші мен Қалааралыққа байланысты өзгереді)"""
 
     if order_type == "intercity":

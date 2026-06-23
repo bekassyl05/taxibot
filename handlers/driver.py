@@ -432,17 +432,18 @@ async def accept_order_directly(callback: CallbackQuery, bot: Bot):
     order_id, price = int(order_id), int(price)
     driver_id = callback.from_user.id
 
-    success, _ = await assign_order_to_driver(order_id, driver_id, price)
+    # 🌟 1-ӨЗГЕРІС: success және res (сәтсіз болғандағы нақты себеп) айнымалыларын қабылдаймыз
+    success, res = await assign_order_to_driver(order_id, driver_id, price)
 
     if success:
-        await set_driver_online_status(driver_id, 0)
+        # 🌟 2-ӨЗГЕРІС: Таксисті бірден офлайн қылып тастайтын жолды алып тастадық (немесе комментарий жасадық)
+        # await set_driver_online_status(driver_id, 0)  <-- Енді бұл керек емес, таксист линияда қала береді
 
         order_info = await get_order_details(order_id)
         client_name, client_phone, client_id = order_info[3], order_info[4], order_info[5]
 
         order_type = order_info[6] if len(order_info) > 6 else "local"
 
-        # Сен жазған тамаша уақытты бөлу логикасы 👏
         timeout_minutes = 60 if order_type == "intercity" else 10
         timeout_seconds = timeout_minutes * 60
         deadline_time = (datetime.now() + timedelta(minutes=timeout_minutes)).strftime("%H:%M")
@@ -480,13 +481,14 @@ async def accept_order_directly(callback: CallbackQuery, bot: Bot):
             parse_mode="HTML"
         )
 
-        # 🌟 Бұл жерде таксист қабылдағаннан кейінгі 10 немесе 60 минуттық таймер іске қосылады
         asyncio.create_task(auto_complete_order_after_timeout(order_id, bot, timeout_seconds))
 
-
     else:
-        await callback.message.edit_text("❌ Кешіріңіз, бұл заказды басқа таксист алып қойды.")
-        await callback.answer("Заказ алынып қойған!")
+        # 🌟 3-ӨЗГЕРІС: Егер лимит толып қалса (3 заказ) немесе заказ басқа адамға кетсе,
+        # `res` ішіндегі нақты қатені таксистке терезе (alert) етіп шығарамыз
+        await callback.answer(text=res, show_alert=True)
+        # Хабарлама мәтінін де қатеге сәйкес өзгертеміз
+        await callback.message.edit_text(f"❌ {res}")
 
 
 @router.callback_query(F.data.startswith("offer:"))

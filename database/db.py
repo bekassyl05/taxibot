@@ -240,29 +240,84 @@ async def get_online_drivers() -> list:
         await conn.close()
 
 
-async def get_available_drivers() -> list:
-    """Онлайн тұрған, бірақ қазір активті заказы ЖОҚ (бос) таксистерді алу"""
+async def get_available_drivers(order_type: str = 'local') -> list:
+    """Онлайн тұрған және тапсырыс түріне қарай бос орыны бар таксистерді алу"""
     conn = await get_db_connection()
     try:
-        rows = await conn.fetch("""
-            SELECT d.telegram_id 
-            FROM drivers d
-            WHERE d.is_online = 1 
-              AND d.telegram_id NOT IN (
-                  SELECT driver_id FROM orders 
-                  WHERE status IN ('accepted', 'arrived', 'in_progress', 'payment_pending')
-                  AND driver_id IS NOT NULL
-              );
-        """)
+        if order_type == 'local':
+            # 🏘 АУЫЛ ІШІ: Мұндай тапсырыс үшін таксист мүлдем бос (0 активті заказ) болуы керек
+            rows = await conn.fetch("""
+                SELECT d.telegram_id 
+                FROM drivers d
+                WHERE d.is_online = 1 
+                  AND d.telegram_id NOT IN (
+                      SELECT driver_id FROM orders 
+                      WHERE status IN ('accepted', 'arrived', 'in_progress', 'payment_pending')
+                      AND driver_id IS NOT NULL
+                  );
+            """)
+        else:
+            # 🏙 ҚАЛА АРАЛЫҚ (intercity): Қолында ауыл ішілік заказы жоқ және
+            # белсенді қалааралық заказдарының саны 3-тен аз таксистерді іздеу
+            rows = await conn.fetch("""
+                SELECT d.telegram_id 
+                FROM drivers d
+                WHERE d.is_online = 1 
+                  -- 1. Белсенді ауыл ішілік (local) заказы барларды мүлдем шығарып тастаймыз
+                  AND d.telegram_id NOT IN (
+                      SELECT driver_id FROM orders 
+                      WHERE status IN ('accepted', 'arrived', 'in_progress', 'payment_pending') 
+                        AND order_type = 'local' AND driver_id IS NOT NULL
+                  )
+                  -- 2. Қалааралық белсенді заказдарының жалпы саны 3-тен аз болуы шарт
+                  AND (
+                      SELECT COUNT(*) FROM orders 
+                      WHERE driver_id = d.telegram_id 
+                        AND status IN ('accepted', 'arrived', 'in_progress', 'payment_pending')
+                  ) < 3;
+            """)
         return [row[0] for row in rows]
     finally:
         await conn.close()
 
 
 async def assign_order_to_driver(order_id: int, driver_id: int, final_price: int) -> tuple:
-    """Заказды таксистке бекіту және қабылданған уақытты жазу"""
+    """Заказды такристке 3-тік лимитті ескере отырып бекіту және уақытын жазу"""
     conn = await get_db_connection()
     try:
+        # 1. Ең алдымен қабылдағалы жатқан тапсырыстың түрін және қазіргі статусын тексереміз
+        order_row = await conn.fetchrow("""
+            SELECT order_type, status FROM orders WHERE order_id = $1
+        """, order_id)
+
+        if not order_row:
+            return False, "Тапсырыс базадан табылмады."
+
+        if order_row['status'] != 'waiting':
+            return False, "Бұл тапсырысты әлдеқашан басқа жүргізуші алып қойған."
+
+        new_order_type = order_row['order_type']
+
+        # 2. Жүргізушінің қазіргі уақыттағы барлық белсенді заказдарын аламыз
+        active_rows = await conn.fetch("""
+            SELECT order_type FROM orders 
+            WHERE driver_id = $1 AND status IN ('accepted', 'arrived', 'in_progress', 'payment_pending')
+        """, driver_id)
+
+        local_count = sum(1 for r in active_rows if r['order_type'] == 'local')
+        intercity_count = sum(1 for r in active_rows if r['order_type'] == 'intercity')
+
+        # 3. Шектеу мен лимиттерді тексеру логикасы
+        if new_order_type == 'local':
+            if len(active_rows) > 0:
+                return False, "Сізде белсенді тапсырыс бар. Ауыл ішіне тек 1 заказ алуға болады."
+        else:  # intercity
+            if local_count > 0:
+                return False, "Сізде белсенді ауыл ішілік тапсырыс бар. Қалааралық тапсырыс ала алмайсыз."
+            if intercity_count >= 3:
+                return False, "Максимум 3 қалааралық тапсырыс қабылдай аласыз! Салон толды."
+
+        # 4. Шарттардың бәрі дұрыс болса, заказды жүргізушіге ресми түрде бекітеміз
         accepted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         status_str = await conn.execute("""
             UPDATE orders 
@@ -270,9 +325,13 @@ async def assign_order_to_driver(order_id: int, driver_id: int, final_price: int
             WHERE order_id = $4 AND status = 'waiting';
         """, driver_id, final_price, accepted_at, order_id)
 
-        # asyncpg-де өзгерген жолдар санын тексеру тәсілі
+        # Өзгерген жолдар санын анықтау
         rows_affected = int(status_str.split()[-1])
-        return rows_affected > 0, accepted_at
+        if rows_affected > 0:
+            return True, accepted_at
+        else:
+            return False, "Тапсырысты бекіту сәтсіз аяқталды."
+
     finally:
         await conn.close()
 
