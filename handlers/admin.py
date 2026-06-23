@@ -1,8 +1,8 @@
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.state import StatesGroup, State, any_state
 import asyncio
 import aiosqlite
 from database.db import DB_PATH
@@ -23,13 +23,14 @@ class AdminBroadcast(StatesGroup):
 
 # --- АДМИН ПАНЕЛІНЕ КІРУ ---
 
-@router.message(Command("admin"))
-async def cmd_admin(message: Message):
+@router.message(Command("admin"), StateFilter(any_state))
+async def cmd_admin(message: Message, state: FSMContext):
     """Тек бастық қана кіре алатын мәзір"""
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ Бұл бөлімге кіруге құқығыңыз жоқ.")
         return
 
+    await state.clear()  # Админ панеліне өткенде клиенттік/таксистік state-терді тазалау
     await message.answer(
         "👋 Қош келдіңіз, Бастық!\nБасқару панелі қосылды. Төмендегі батырмаларды қолданыңыз:",
         reply_markup=get_admin_menu_kb()
@@ -294,35 +295,63 @@ async def approve_subscription(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("sub_reject:"))
 async def reject_subscription(callback: CallbackQuery, bot: Bot):
+    # 1. Тез арада Telegram-ға жауап беру (батырмадағы loading белгісі жоғалу үшін)
+    await callback.answer("Төлем қабылданбады")
+
+    # 2. Callback дерегінен жүргізушінің ID-ін алу
     parts = callback.data.split(":")
     driver_id = int(parts[1])
 
+    # 3. Чектің астындағы жазуды (caption) ескі мәтінді сақтай отырып жаңарту
+    old_caption = callback.message.caption or ""
     await callback.message.edit_caption(
-        caption=f"{callback.message.caption}\n\n❌ <b>БАС ТАРТЫЛДЫ</b>",
+        caption=f"{old_caption}\n\n❌ <b>БАС ТАРТЫЛДЫ (Төлем расталмады)</b>",
         parse_mode="HTML"
     )
 
+    # 4. Жүргізушіге ескерту хабарламасын жіберу
     try:
         await bot.send_message(
             chat_id=driver_id,
             text="❌ <b>Кешіріңіз, админ сіздің төлеміңізді растамады.</b>\n"
-                 "Чекті дұрыстап қайта жіберіп көріңіз немесе админмен байланысыңыз.",
+                 "Сіз жіберген чек жарамсыз немесе сомасы қате болуы мүмкін. "
+                 "Қайтадан дұрыс PDF чек жіберіңіз немесе бастыққа хабарласыңыз.",
             parse_mode="HTML"
         )
     except Exception:
         pass
 
-
-@router.callback_query(F.data.startswith("sub_reject:"))
-async def reject_subscription(callback: CallbackQuery, bot: Bot):
-    driver_id = int(callback.data.split(":")[1])
-    await callback.message.edit_caption(caption="❌ Төлем қабылданбады.")
-
-    try:
-        await bot.send_message(
-            chat_id=driver_id,
-            text="❌ Сіз жіберген чек жарамсыз немесе төлем расталмады. Қайтадан дұрыс PDF чек жіберіңіз немесе бастыққа хабарласыңыз."
-        )
-    except Exception:
-        pass
-    await callback.answer()
+# @router.callback_query(F.data.startswith("sub_reject:"))
+# async def reject_subscription(callback: CallbackQuery, bot: Bot):
+#     parts = callback.data.split(":")
+#     driver_id = int(parts[1])
+#
+#     await callback.message.edit_caption(
+#         caption=f"{callback.message.caption}\n\n❌ <b>БАС ТАРТЫЛДЫ</b>",
+#         parse_mode="HTML"
+#     )
+#
+#     try:
+#         await bot.send_message(
+#             chat_id=driver_id,
+#             text="❌ <b>Кешіріңіз, админ сіздің төлеміңізді растамады.</b>\n"
+#                  "Чекті дұрыстап қайта жіберіп көріңіз немесе админмен байланысыңыз.",
+#             parse_mode="HTML"
+#         )
+#     except Exception:
+#         pass
+#
+#
+# @router.callback_query(F.data.startswith("sub_reject:"))
+# async def reject_subscription(callback: CallbackQuery, bot: Bot):
+#     driver_id = int(callback.data.split(":")[1])
+#     await callback.message.edit_caption(caption="❌ Төлем қабылданбады.")
+#
+#     try:
+#         await bot.send_message(
+#             chat_id=driver_id,
+#             text="❌ Сіз жіберген чек жарамсыз немесе төлем расталмады. Қайтадан дұрыс PDF чек жіберіңіз немесе бастыққа хабарласыңыз."
+#         )
+#     except Exception:
+#         pass
+#     await callback.answer()

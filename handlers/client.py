@@ -1,8 +1,8 @@
 from aiogram import Router, F, types
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.state import StatesGroup, State, any_state
 from aiogram import Bot
 from database.db import create_order, get_online_drivers, get_available_drivers, get_user, assign_order_to_driver, \
     get_driver, \
@@ -26,10 +26,11 @@ class ClientReg(StatesGroup):
 class ClientFeedback(StatesGroup):
     waiting_for_review = State()
 
-@router.message(CommandStart())
+# 🌟 ТҮЗЕТІЛДІ: StateFilter(any_state) қосылды
+@router.message(CommandStart(), StateFilter(any_state))
 async def cmd_start(message: Message, state: FSMContext):
     """/start командасы - Пайдаланушыны тексеру немесе тіркеуді бастау"""
-    await state.clear()  # Кез келген ескі күйлерді тазалау
+    await state.clear()  # Кез келген ескі күйлерді (state) тазалау
 
     user = await get_user(message.from_user.id)
 
@@ -37,11 +38,14 @@ async def cmd_start(message: Message, state: FSMContext):
         role = user[2]  # Базадағы 'role' бағаны
         if role == 'client':
             await message.answer(
-                f"Қайта қош келдіңіз, {user[1]}! (Клиент мәзірі)\nЗаказ беру үшін төмендегі батырмаларды қолданыңыз.")
-            # Бұл жерге кейін клиенттің басты меню батырмаларын қосамыз
+                f"Қайта қош келдіңіз, {user[1]}! (Клиент мәзірі)\nЗаказ беру үшін төмендегі батырмаларды қолданыңыз.",
+                reply_markup=get_client_menu_kb()
+            )
         elif role == 'driver':
             await message.answer(
-                f"Қайта қош келдіңіз, {user[1]}! (Таксист мәзірі)\nЛинияға шығу үшін басқару панелін қолданыңыз.")
+                f"Қайта қош келдіңіз, {user[1]}! (Таксист мәзірі)\nЛинияға шығу үшін басқару панелін қолданыңыз.",
+                reply_markup=get_driver_menu_kb()
+            )
     else:
         # Жаңа қолданушы болса, рөл таңдауды ұсынамыз
         await message.answer(
