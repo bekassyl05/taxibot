@@ -12,7 +12,7 @@ from config import ADMIN_ID
 from database.db import (
     check_driver_subscription, set_driver_online_status, update_order_status,
     assign_order_to_driver, get_order_details, get_driver, get_user, get_waiting_orders,
-    auto_cancel_order_after_timeout, change_user_mode, register_driver_complete
+    auto_cancel_order_after_timeout, change_user_mode, register_driver_complete, get_db_connection
 )
 from keyboards.inline import get_admin_sub_kb, get_driver_order_kb, get_client_decision_kb, get_broadcast_kb
 from keyboards.reply import get_client_menu_kb
@@ -311,14 +311,23 @@ async def process_order_paid(call: CallbackQuery, bot: Bot):
 
     client_id = order_info[5]
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT created_at FROM orders WHERE order_id = ?", (order_id,)) as cursor:
-            row = await cursor.fetchone()
-            created_at_str = row[0] if row else None
+    # 🔥 ЖАҢА ПОСТГРЕС БЛОГЫ (Ескі aiosqlite-тің орнына)
+    conn = await get_db_connection()
+    try:
+        row = await conn.fetchrow("SELECT created_at FROM orders WHERE order_id = $1", order_id)
+        created_at_val = row[0] if row else None
+    finally:
+        await conn.close()
 
-    if created_at_str:
+    if created_at_val:
         try:
-            created_time = datetime.strptime(created_at_str[:19], "%Y-%m-%d %H:%M:%S")
+            # PostgreSQL-де TIMESTAMP типі автоматты түрде Python-ның datetime объектісі болып келеді.
+            # Сондықтан оның типі мәтін бе, әлде дайын уақыт па — тексеріп аламыз:
+            if isinstance(created_at_val, str):
+                created_time = datetime.strptime(created_at_val[:19], "%Y-%m-%d %H:%M:%S")
+            else:
+                created_time = created_at_val  # Егер дайын datetime объектісі болса
+
             now = datetime.now()
             seconds_passed = (now - created_time).total_seconds()
 
