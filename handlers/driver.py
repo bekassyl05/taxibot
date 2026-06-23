@@ -11,8 +11,8 @@ from config import ADMIN_ID
 # 🌟 ТҮЗЕТІЛДІ: auto_cancel_order_after_timeout осында импортталды
 from database.db import (
     check_driver_subscription, set_driver_online_status, update_order_status,
-    assign_order_to_driver, get_order_details, get_driver, DB_PATH, get_user, get_waiting_orders,
-    auto_cancel_order_after_timeout, change_user_mode
+    assign_order_to_driver, get_order_details, get_driver, get_user, get_waiting_orders,
+    auto_cancel_order_after_timeout, change_user_mode, register_driver_complete
 )
 from keyboards.inline import get_admin_sub_kb, get_driver_order_kb, get_client_decision_kb, get_broadcast_kb
 from keyboards.reply import get_client_menu_kb
@@ -84,7 +84,6 @@ async def process_driver_plate(message: Message, state: FSMContext):
     user_data = await state.get_data()
 
     # 🌟 1-ТҮЗЕТУ: KeyError алдын алу үшін .get() қолданамыз
-    # Егер мәлімет табылмаса, бос қалмас үшін қосалқы сөздер жазамыз
     driver_name = user_data.get('driver_name', message.from_user.full_name)
     driver_phone = user_data.get('driver_phone', 'Көрсетілмеген')
     driver_car = user_data.get('driver_car', 'Белгісіз көлік')
@@ -92,41 +91,23 @@ async def process_driver_plate(message: Message, state: FSMContext):
 
     reg_date = datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    async with aiosqlite.connect(DB_PATH) as db:
-        # Таксистер кестесіне мәліметті сақтаймыз
-        await db.execute(
-            "INSERT OR REPLACE INTO drivers (telegram_id, car_model, car_number, is_online, registration_date) VALUES (?, ?, ?, 0, ?)",
-            (driver_id, driver_car, driver_plate, reg_date)
-        )
+    await register_driver_complete(
+        telegram_id=driver_id,
+        car_model=driver_car,
+        car_number=driver_plate,
+        full_name=driver_name,
+        phone_number=driver_phone,
+        reg_date=reg_date
+    )
 
-        # Пайдаланушының users кестесінде бар-жоғын тексереміз
-        cursor = await db.execute("SELECT * FROM users WHERE telegram_id = ?", (driver_id,))
-        user_exists = await cursor.fetchone()
-
-        if user_exists:
-            # Клиент базада бар болса, тек таксист статусын беріп, режимді ауыстырамыз.
-            await db.execute(
-                "UPDATE users SET is_driver = 1, current_mode = 'driver' WHERE telegram_id = ?",
-                (driver_id,)
-            )
-        else:
-            # Мүлдем жаңа адам болса (клиент болып тіркелмеген):
-            await db.execute(
-                "INSERT INTO users (telegram_id, full_name, phone_number, is_client, is_driver, current_mode, registration_date) VALUES (?, ?, ?, 0, 1, 'driver', ?)",
-                (driver_id, driver_name, driver_phone, reg_date)
-            )
-
-        await db.commit()
-
-    # Таксист режимінің басты мәзірі
+    # Таксист режимінің басты мәзірі (Сенің батырмаларың)
     kb = [
         [KeyboardButton(text="🚕 Линияға шығу")],
         [KeyboardButton(text="👤 Клиент режиміне өту")]
     ]
     driver_menu_kb = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-    # 🌟 2-ТҮЗЕТУ: TypeError алдын алу. Телефон сан (int) болып келсе де
-    # бот құламас үшін бәрін күштеп мәтінге (str) айналдырамыз.
+    # 🌟 2-ТҮЗЕТУ: TypeError алдын алу.
     safe_name = html.escape(str(driver_name))
     safe_phone = html.escape(str(driver_phone))
     safe_car = html.escape(str(driver_car))

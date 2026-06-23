@@ -113,6 +113,42 @@ async def register_driver(telegram_id: int, car_model: str, car_number: str):
         await conn.close()
 
 
+async def register_driver_complete(telegram_id: int, car_model: str, car_number: str, full_name: str, phone_number: str,
+                                   reg_date: str):
+    """Жүргізушіні drivers кестесіне қосу және users кестесіндегі статусын толық жаңарту (PostgreSQL)"""
+    conn = await get_db_connection()
+    try:
+        # 1. Drivers кестесіне мәліметті сақтау немесе жаңарту
+        await conn.execute("""
+            INSERT INTO drivers (telegram_id, car_model, car_number, subscription_end, is_online, registration_date) 
+            VALUES ($1, $2, $3, NULL, 0, $4)
+            ON CONFLICT (telegram_id) DO UPDATE SET
+            car_model = EXCLUDED.car_model,
+            car_number = EXCLUDED.car_number,
+            registration_date = EXCLUDED.registration_date;
+        """, telegram_id, car_model, car_number, reg_date)
+
+        # 2. Пайдаланушының users кестесінде бар-жоғын тексеру
+        user_exists = await conn.fetchrow("SELECT telegram_id FROM users WHERE telegram_id = $1", telegram_id)
+
+        if user_exists:
+            # Клиент базада бар болса, тек таксист статусын беріп, режимді ауыстырамыз
+            await conn.execute("""
+                UPDATE users 
+                SET is_driver = 1, current_mode = 'driver' 
+                WHERE telegram_id = $1;
+            """, telegram_id)
+        else:
+            # Мүлдем жаңа адам болса (клиент болып тіркелмеген):
+            await conn.execute("""
+                INSERT INTO users (telegram_id, full_name, phone_number, is_client, is_driver, current_mode, registration_date) 
+                VALUES ($1, $2, $3, 0, 1, 'driver', $4);
+            """, telegram_id, full_name, phone_number, reg_date)
+
+    finally:
+        await conn.close()
+
+
 async def get_user(telegram_id: int):
     """Қолданушының базада бар-жоғын және ролін тексеру"""
     conn = await get_db_connection()
