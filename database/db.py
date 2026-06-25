@@ -116,7 +116,7 @@ async def register_user(telegram_id: int, full_name: str, phone_number: str, rol
 
 async def register_driver_complete(telegram_id: int, car_model: str, car_number: str, full_name: str, phone_number: str,
                                    reg_date: str):
-    """Жүргізушіні drivers кестесіне қосу және users кестесіндегі статусын толық жаңарту (PostgreSQL)"""
+    """Жүргізушіні drivers кестесіне қосу, users кестесін жаңарту және 1 апта тегін доступ беру (PostgreSQL)"""
     conn = await get_db_connection()
     try:
         # 1. ЕҢ БІРІНШІ: Пайдаланушының users кестесінде бар-жоғын тексереміз немесе тіркейміз
@@ -136,15 +136,21 @@ async def register_driver_complete(telegram_id: int, car_model: str, car_number:
                 VALUES ($1, $2, $3, 0, 1, 'driver', $4);
             """, telegram_id, full_name, phone_number, reg_date)
 
+        # 🌟 1 АПТА ТЕГІН ДОСТУП ҮШІН УАҚЫТТЫ ЕСЕПТЕУ
+        sub_start = datetime.now().strftime("%Y-%m-%d")
+        sub_end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+
         # 2. ЕКІНШІ: Пайдаланушы users кестесіне нақты жазылғаннан кейін ғана drivers-қа қосамыз
+        # Ескерту: Төменде subscription_start пен subscription_end мәндері ТЕК БІРІНШІ РЕТ ТІРКЕЛГЕНДЕ жазылады.
+        # Егер жүргізуші қулық жасап, ботты өшіріп қайта тіркелсе, ON CONFLICT іске қосылып, оның тегін мерзімі ЖАҢАРМАЙДЫ.
         await conn.execute("""
-            INSERT INTO drivers (telegram_id, car_model, car_number, subscription_end, is_online, registration_date) 
-            VALUES ($1, $2, $3, NULL, 0, $4)
+            INSERT INTO drivers (telegram_id, car_model, car_number, subscription_start, subscription_end, is_online, registration_date) 
+            VALUES ($1, $2, $3, $4, $5, 0, $6)
             ON CONFLICT (telegram_id) DO UPDATE SET
             car_model = EXCLUDED.car_model,
             car_number = EXCLUDED.car_number,
             registration_date = EXCLUDED.registration_date;
-        """, telegram_id, car_model, car_number, reg_date)
+        """, telegram_id, car_model, car_number, sub_start, sub_end, reg_date)
 
     finally:
         await conn.close()
